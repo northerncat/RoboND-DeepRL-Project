@@ -42,15 +42,15 @@ if [ $BUILD_PYTORCH = "ON" ] || [ $BUILD_PYTORCH = "YES" ] || [ $BUILD_PYTORCH =
 	sudo apt-get install python-pip
 
 	# upgrade pip
-	pip install -U pip
-	pip --version
+	python -m pip install -U pip
+	python -m pip --version
 	# pip 9.0.1 from /home/ubuntu/.local/lib/python2.7/site-packages (python 2.7)
 
 	# setproctitle extension used by A3G
 	# sudo pip install setproctitle 
 
 	# install numpy
-	sudo pip install numpy
+	sudo python -m pip install numpy
 	sudo apt-get install python-gi-cairo
 
 	# see https://github.com/torch/cutorch/issues/797
@@ -67,8 +67,8 @@ if [ $BUILD_PYTORCH = "ON" ] || [ $BUILD_PYTORCH = "YES" ] || [ $BUILD_PYTORCH =
 	git submodule update --init
 
 	# install prereqs
-	sudo pip install -U setuptools
-	sudo pip install -r requirements.txt
+	sudo python -m pip install -U setuptools
+	sudo python -m pip install -r requirements.txt
 
 	# Develop Mode:
 	python setup.py build_deps
@@ -83,14 +83,14 @@ if [ $BUILD_PYTORCH = "ON" ] || [ $BUILD_PYTORCH = "YES" ] || [ $BUILD_PYTORCH =
 	cd ../../
 
 	git clone https://github.com/pytorch/examples
-	sudo pip install -r examples/reinforcement_learning/requirements.txt 
+	sudo python -m pip install -r examples/reinforcement_learning/requirements.txt 
 
 	git clone https://github.com/pytorch/vision
 	cd vision
 	sudo python setup.py install
 
 	sudo apt-get install swig
-	sudo pip install box2D
+	sudo python -m pip install box2D
 
 	cd ../../
 
@@ -103,7 +103,7 @@ sudo apt-get install libglew-dev glew-utils libgstreamer1.0-dev libgstreamer-plu
 # build Torch?
 #
 if [ $BUILD_TORCH = "ON" ] || [ $BUILD_TORCH = "YES" ] || [ $BUILD_TORCH = "Y" ]; then
-
+F
 # Install dependencies for Torch:
 echo "[Pre-build]  installing Torch7 package dependencies"
 

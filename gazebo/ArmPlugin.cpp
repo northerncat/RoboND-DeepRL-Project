@@ -1,6 +1,6 @@
 /* 
  * Author - Dustin Franklin (Nvidia Jetson Developer)
- * Modified by - Sahil Juneja, Kyle Stewart-Frantz
+ * Modified by - Sahil Juneja, Kyle Stewart-Frantz, Brad Huang
  *
  */
 
@@ -28,29 +28,31 @@
 #define GAMMA 0.9f
 #define EPS_START 0.9f
 #define EPS_END 0.05f
-#define EPS_DECAY 200
+#define EPS_DECAY 100
 
 /*
 / TODO - Tune the following hyperparameters
 /
 */
-
-#define INPUT_WIDTH   512
-#define INPUT_HEIGHT  512
-#define OPTIMIZER "None"
-#define LEARNING_RATE 0.0f
+#define INPUT_WIDTH   128
+#define INPUT_HEIGHT  128
+#define OPTIMIZER "RMSprop"
+#define LEARNING_RATE 0.01f
 #define REPLAY_MEMORY 10000
-#define BATCH_SIZE 8
-#define USE_LSTM false
-#define LSTM_SIZE 32
+#define BATCH_SIZE 512
+#define USE_LSTM true
+#define LSTM_SIZE 256
 
 /*
 / TODO - Define Reward Parameters
 /
 */
 
-#define REWARD_WIN  0.0f
-#define REWARD_LOSS -0.0f
+#define REWARD_WIN  0.1f
+#define REWARD_LOSS -0.1f
+#define GOAL_DELTA_ALPHA 0.9f
+#define REWARD_INTERIM_MULT 100.0f
+#define GRIPPER_COLLISION_REWARD_MULT 10.0f
 
 // Define Object Names
 #define WORLD_NAME "arm_world"
@@ -60,7 +62,8 @@
 // Define Collision Parameters
 #define COLLISION_FILTER "ground_plane::link::collision"
 #define COLLISION_ITEM   "tube::tube_link::tube_collision"
-#define COLLISION_POINT  "arm::gripperbase::gripper_link"
+#define COLLISION_GRIPPER_BASE  "arm::gripperbase::gripper_link"
+#define COLLISION_GRIPPER_MIDDLE  "arm::gripper_middle::middle_collision"
 
 // Animation Steps
 #define ANIMATION_STEPS 1000
@@ -104,7 +107,7 @@ ArmPlugin::ArmPlugin() : ModelPlugin(), cameraNode(new gazebo::transport::Node()
 	inputRawHeight   = 0;
 	actionJointDelta = 0.15f;
 	actionVelDelta   = 0.1f;
-	maxEpisodeLength = 100;
+	maxEpisodeLength = 80;
 	episodeFrames    = 0;
 
 	newState         = false;
@@ -132,23 +135,21 @@ void ArmPlugin::Load(physics::ModelPtr _parent, sdf::ElementPtr /*_sdf*/)
 
 	// Create our node for camera communication
 	cameraNode->Init();
-	
+
 	/*
 	/ TODO - Subscribe to camera topic
 	/
 	*/
-	
-	//cameraSub = None;
+	cameraSub = cameraNode->Subscribe("/gazebo/arm_world/camera/link/camera/image", &ArmPlugin::onCameraMsg, this);
 
 	// Create our node for collision detection
 	collisionNode->Init();
-		
+
 	/*
 	/ TODO - Subscribe to prop collision topic
 	/
 	*/
-	
-	//collisionSub = None;
+	collisionSub = collisionNode->Subscribe("/gazebo/arm_world/tube/tube_link/my_contact", &ArmPlugin::onCollisionMsg, this);
 
 	// Listen to the update event. This event is broadcast every simulation iteration.
 	this->updateConnection = event::Events::ConnectWorldUpdateBegin(boost::bind(&ArmPlugin::OnUpdate, this, _1));
@@ -166,8 +167,10 @@ bool ArmPlugin::createAgent()
 	/ TODO - Create DQN Agent
 	/
 	*/
-	
-	agent = NULL;
+	agent = dqnAgent::Create(INPUT_WIDTH, INPUT_HEIGHT, INPUT_CHANNELS , DOF * 2 /* number of actions */, 
+					OPTIMIZER, LEARNING_RATE, REPLAY_MEMORY, BATCH_SIZE, 
+					GAMMA, EPS_START, EPS_END, EPS_DECAY, 
+					USE_LSTM, LSTM_SIZE, ALLOW_RANDOM, DEBUG_DQN);
 
 	if( !agent )
 	{
@@ -254,28 +257,28 @@ void ArmPlugin::onCollisionMsg(ConstContactsPtr &contacts)
 		if( strcmp(contacts->contact(i).collision2().c_str(), COLLISION_FILTER) == 0 )
 			continue;
 
-		if(DEBUG){std::cout << "Collision between[" << contacts->contact(i).collision1()
-			     << "] and [" << contacts->contact(i).collision2() << "]\n";}
+		std::cout << "Collision between[" << contacts->contact(i).collision1() << "] and [" << contacts->contact(i).collision2() << "]\n";
 
 	
 		/*
 		/ TODO - Check if there is collision between the arm and object, then issue learning reward
 		/
 		*/
-		
-		/*
-		
-		if (collisionCheck)
-		{
-			rewardHistory = None;
-
-			newReward  = None;
-			endEpisode = None;
-
-			return;
+		const bool collisionCheck = strcmp(contacts->contact(i).collision1().c_str(), COLLISION_ITEM) == 0;
+		if (collisionCheck) {
+			const bool gripperCollision = strcmp(contacts->contact(i).collision2().c_str(), COLLISION_GRIPPER_BASE) == 0 ||
+										  strcmp(contacts->contact(i).collision2().c_str(), COLLISION_GRIPPER_MIDDLE) == 0;
+			if (gripperCollision) {
+				rewardHistory = REWARD_WIN * GRIPPER_COLLISION_REWARD_MULT;
+				newReward  = true;
+				endEpisode = true;
+				return;
+			} else {
+				rewardHistory = REWARD_LOSS;
+				newReward  = true;
+				endEpisode = true;
+			}
 		}
-		*/
-		
 	}
 }
 
@@ -312,6 +315,8 @@ bool ArmPlugin::updateAgent()
 	if(DEBUG){printf("ArmPlugin - agent selected action %i\n", action);}
 
 
+	const int jointIndex = action / 2;
+	const int actionDirection = 2 * (action % 2) - 1;
 
 #if VELOCITY_CONTROL
 	// if the action is even, increase the joint position by the delta parameter
@@ -322,8 +327,8 @@ bool ArmPlugin::updateAgent()
 	/ TODO - Increase or decrease the joint velocity based on whether the action is even or odd
 	/
 	*/
-	
-	float velocity = 0.0; // TODO - Set joint velocity based on whether action is even or odd.
+	float velocity = vel[jointIndex] + actionVelDelta * actionDirection; // TODO - Set joint velocity based on whether action is even or odd.
+// 	float velocity = 0.0; // TODO - Set joint velocity based on whether action is even or odd.
 
 	if( velocity < VELOCITY_MIN )
 		velocity = VELOCITY_MIN;
@@ -331,7 +336,7 @@ bool ArmPlugin::updateAgent()
 	if( velocity > VELOCITY_MAX )
 		velocity = VELOCITY_MAX;
 
-	vel[action/2] = velocity;
+	vel[jointIndex] = velocity;
 	
 	for( uint32_t n=0; n < DOF; n++ )
 	{
@@ -354,16 +359,25 @@ bool ArmPlugin::updateAgent()
 	/ TODO - Increase or decrease the joint position based on whether the action is even or odd
 	/
 	*/
-	float joint = 0.0; // TODO - Set joint position based on whether action is even or odd.
+	float joint = ref[jointIndex] + actionJointDelta * actionDirection;
+// 	float joint = 0.0; // TODO - Set joint position based on whether action is even or odd.
 
 	// limit the joint to the specified range
-	if( joint < JOINT_MIN )
+	if( joint < JOINT_MIN ) {
+		if (DEBUG) {
+			printf("Joint %d hit minimum value %.3f as %.3f after action %d\n", jointIndex, JOINT_MIN, joint, action);
+		}
 		joint = JOINT_MIN;
+	}
 	
-	if( joint > JOINT_MAX )
+	if( joint > JOINT_MAX ) {
+		if (DEBUG) {
+			printf("Joint %d hit maximum value %.3f as %.3f after action %d\n", jointIndex, JOINT_MAX, joint, action);
+		}
 		joint = JOINT_MAX;
+	}
 
-	ref[action/2] = joint;
+	ref[jointIndex] = joint;
 
 #endif
 
@@ -577,44 +591,30 @@ void ArmPlugin::OnUpdate(const common::UpdateInfo& updateInfo)
 		/ TODO - set appropriate Reward for robot hitting the ground.
 		/
 		*/
-		
-		
-		/*if(checkGroundContact)
-		{
-						
+		const bool checkGroundContact = gripBBox.min.z <= groundContact;
+
+		if(checkGroundContact) {
 			if(DEBUG){printf("GROUND CONTACT, EOE\n");}
 
-			rewardHistory = None;
-			newReward     = None;
-			endEpisode    = None;
-		}
-		*/
-		
-		/*
-		/ TODO - Issue an interim reward based on the distance to the object
-		/
-		*/ 
-		
-		/*
-		if(!checkGroundContact)
-		{
-			const float distGoal = 0; // compute the reward from distance to the goal
-
+			rewardHistory = REWARD_LOSS * 100;
+			newReward     = true;
+			endEpisode    = true;
+		} else {
+			// TODO - Issue an interim reward based on the distance to the object
+			const float distGoal = BoxDistance(gripBBox, propBBox); // compute the distance to the goal
 			if(DEBUG){printf("distance('%s', '%s') = %f\n", gripper->GetName().c_str(), prop->model->GetName().c_str(), distGoal);}
 
-			
-			if( episodeFrames > 1 )
-			{
-				const float distDelta  = lastGoalDistance - distGoal;
+			if( episodeFrames > 1 ) {
+				const float distDelta = lastGoalDistance - distGoal;
 
 				// compute the smoothed moving average of the delta of the distance to the goal
-				avgGoalDelta  = 0.0;
-				rewardHistory = None;
-				newReward     = None;	
+				avgGoalDelta = (avgGoalDelta * GOAL_DELTA_ALPHA) + (distDelta * (1.0f - GOAL_DELTA_ALPHA));
+				rewardHistory = avgGoalDelta * REWARD_INTERIM_MULT;
+				newReward = true;
 			}
 
 			lastGoalDistance = distGoal;
-		} */
+		}
 	}
 
 	// issue rewards and train DQN
@@ -643,6 +643,7 @@ void ArmPlugin::OnUpdate(const common::UpdateInfo& updateInfo)
 			totalRuns++;
 			printf("Current Accuracy:  %0.4f (%03u of %03u)  (reward=%+0.2f %s)\n", float(successfulGrabs)/float(totalRuns), successfulGrabs, totalRuns, rewardHistory, (rewardHistory >= REWARD_WIN ? "WIN" : "LOSS"));
 
+//           	if (1.0f * successfulGrabs / totalRuns < 0.5f && totalRuns > 30) exit(0);
 
 			for( uint32_t n=0; n < DOF; n++ )
 				vel[n] = 0.0f;
